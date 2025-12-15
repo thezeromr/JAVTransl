@@ -5,8 +5,9 @@ build/
 dist/
 wheels/
 *.egg-info
-
+JAVTransl_v1.0
 # Virtual environments
 .venv
 
 Faster-Whisper-XXL/*
+release/
