@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Iterable
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -17,6 +19,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from gen_srt import SubtitleGenerationController
 
 
 class FileListWidget(QListWidget):
@@ -111,9 +115,11 @@ class MainWindow(QMainWindow):
         self.file_list = FileListWidget()
         self.video_output = QPlainTextEdit()
         self.subtitle_output = QPlainTextEdit()
+        self.controller = SubtitleGenerationController(self)
 
         self._configure_widgets()
         self._compose_layout()
+        self._wire_events()
 
     def _configure_widgets(self) -> None:
         """配置控件的基础属性。"""
@@ -167,3 +173,62 @@ class MainWindow(QMainWindow):
         layout.addWidget(label)
         layout.addWidget(text_area)
         return layout
+
+    def _wire_events(self) -> None:
+        """连接按钮及后台控制器。"""
+
+        self.process_button.clicked.connect(self._handle_process_clicked)
+        self.translate_button.clicked.connect(self._handle_translate_clicked)
+        self.controller.log_message.connect(self._append_video_output)
+        self.controller.translation_message.connect(self._append_subtitle_output)
+        self.controller.busy_changed.connect(self._handle_busy_changed)
+        self.controller.request_file_list_clear.connect(self.file_list.clear)
+
+    def _handle_process_clicked(self) -> None:
+        """开始执行字幕生成。"""
+
+        items = [Path(self.file_list.item(i).text()) for i in range(self.file_list.count())]
+        self.controller.start_processing(items)
+
+    def _handle_translate_clicked(self) -> None:
+        """弹出文件对话框并加入翻译队列。"""
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择字幕文件",
+            "",
+            "Subtitle Files (*.srt);;All Files (*)",
+        )
+        if files:
+            self.controller.enqueue_manual_translations(Path(path) for path in files)
+
+    def _append_video_output(self, text: str) -> None:
+        """写入 faster-whisper 输出。"""
+
+        cursor = self.video_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(text)
+        self.video_output.setTextCursor(cursor)
+        self.video_output.ensureCursorVisible()
+
+    def _append_subtitle_output(self, text: str) -> None:
+        """写入字幕翻译输出。"""
+
+        cursor = self.subtitle_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(text)
+        self.subtitle_output.setTextCursor(cursor)
+        self.subtitle_output.ensureCursorVisible()
+
+    def _handle_busy_changed(self, busy: bool) -> None:
+        """根据后台状态启用/禁用按钮。"""
+
+        enabled = not busy
+        self.process_button.setEnabled(enabled)
+        self.translate_button.setEnabled(enabled)
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+        """窗口关闭时停止所有后台进程。"""
+
+        self.controller.shutdown()
+        super().closeEvent(event)
