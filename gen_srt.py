@@ -219,8 +219,6 @@ class SubtitleGenerationController(QObject):
             "srt",
             "-m",
             "medium",
-            "--language",
-            "ja",
         ]
 
         self._launch_process(str(exe_path), arguments, str(exe_path.parent))
