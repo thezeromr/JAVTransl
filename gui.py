@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QComboBox,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
 
         self.process_button = QPushButton("开始处理")
         self.translate_button = QPushButton("翻译字幕")
+        self.model_selector = QComboBox()
         self.file_list = FileListWidget()
         self.video_output = QPlainTextEdit()
         self.subtitle_output = QPlainTextEdit()
@@ -126,6 +128,8 @@ class MainWindow(QMainWindow):
 
         self.file_list.setToolTip("拖入视频文件，或后续通过其它入口添加。")
         self.file_list.setMinimumHeight(360)
+        self.model_selector.addItems(["medium", "large-v3"])
+        self.model_selector.setCurrentText("large-v3")
         self.video_output.setReadOnly(True)
         self.subtitle_output.setReadOnly(True)
         self.video_output.setPlaceholderText("视频输出将在此显示……")
@@ -145,6 +149,8 @@ class MainWindow(QMainWindow):
         controls_layout = QHBoxLayout()
         controls_layout.addWidget(self.process_button)
         controls_layout.addWidget(self.translate_button)
+        controls_layout.addWidget(QLabel("语音模型"))
+        controls_layout.addWidget(self.model_selector)
         controls_layout.addStretch(1)
         root_layout.addLayout(controls_layout)
 
@@ -188,7 +194,8 @@ class MainWindow(QMainWindow):
         """开始执行字幕生成。"""
 
         items = [Path(self.file_list.item(i).text()) for i in range(self.file_list.count())]
-        self.controller.start_processing(items)
+        model_name = self.model_selector.currentText()
+        self.controller.start_processing(items, model_name)
 
     def _handle_translate_clicked(self) -> None:
         """弹出文件对话框并加入翻译队列。"""

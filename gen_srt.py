@@ -40,7 +40,7 @@ class SubtitleGenerationController(QObject):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def start_processing(self, video_paths: Iterable[Path | str]) -> None:
+    def start_processing(self, video_paths: Iterable[Path | str], model_name: str = "large-v3") -> None:
         """开始调用 faster-whisper 批量生成字幕。"""
 
         items = []
@@ -64,7 +64,7 @@ class SubtitleGenerationController(QObject):
         self._has_seen_processing_line = False
         self._last_processing_file = None
         self._stdout_buffer = ""
-        self._run_with_executable(items)
+        self._run_with_python_module(items, model_name)
         self._update_busy_state()
 
     def enqueue_manual_translations(self, srt_paths: Iterable[Path | str]) -> None:
@@ -219,9 +219,34 @@ class SubtitleGenerationController(QObject):
             "srt",
             "-m",
             "medium",
+            "--language",
+            "ja"
         ]
 
         self._launch_process(str(exe_path), arguments, str(exe_path.parent))
+
+    def _run_with_python_module(self, items: List[str], model_name: str) -> None:
+        base_dir = Path(__file__).resolve().parent
+        script_path = base_dir / "faster-whisper.py"
+        if not script_path.exists():
+            self._emit_log("未找到faster-whisper.py，无法开始处理。\n")
+            self._reset_processing_state()
+            self.batch_process = None
+            self._update_busy_state()
+            self._request_file_list_clear_if_idle()
+            return
+
+        python_exec = sys.executable or "python"
+        arguments = [
+            str(script_path),
+            *items,
+            "--model",
+            model_name,
+            "--language",
+            "ja",
+        ]
+
+        self._launch_process(python_exec, arguments, str(base_dir))
 
     def _launch_process(self, program: str, arguments: List[str], working_dir: str) -> None:
         process = QProcess(self)
