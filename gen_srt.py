@@ -16,8 +16,11 @@ class SubtitleGenerationController(QObject):
 
     log_message = pyqtSignal(str)
     translation_message = pyqtSignal(str)
+    translation_progress = pyqtSignal(int, int)
+    processing_progress = pyqtSignal(str)
     busy_changed = pyqtSignal(bool)
     request_file_list_clear = pyqtSignal()
+    file_completed = pyqtSignal(str)
 
     IGNORED_BATCH_EXIT_CODES = {-1073740791}
     TRANSLATION_ENQUEUE_DELAY_MS = 3000
@@ -34,7 +37,9 @@ class SubtitleGenerationController(QObject):
         self._has_seen_processing_line = False
         self._last_processing_file: str | None = None
         self._stdout_buffer = ""
+        self._translation_stdout_buffer = ""
         self._waiting_translation_path: str | None = None
+        self._srt_to_video: dict[str, str] = {}
         self._busy = False
 
     # ------------------------------------------------------------------
@@ -82,17 +87,28 @@ class SubtitleGenerationController(QObject):
         if added:
             self._emit_translation(f"已添加 {added} 个字幕到翻译队列。\n")
 
+    def enqueue_translation_for_video(self, video_path: Path | str) -> None:
+        """根据视频路径加入翻译队列（用于已存在字幕的情况）。"""
+
+        normalized = os.path.abspath(str(video_path))
+        srt_path = self._expected_srt_path(normalized)
+        self._srt_to_video[srt_path] = normalized
+        self._enqueue_translation_path(srt_path)
+
     def shutdown(self) -> None:
         """在应用退出时停止所有运行中的子进程。"""
 
         self._terminate_process(self.batch_process)
         self.batch_process = None
         self._terminate_process(self.translation_process)
+        self.translation_progress.emit(0, 0)
         self.translation_process = None
+        self.processing_progress.emit("")
         self.translation_queue.clear()
         self.current_translation = None
         self._waiting_translation_path = None
         self._reset_processing_state()
+        self._translation_stdout_buffer = ""
         self._update_busy_state()
 
     # ------------------------------------------------------------------
@@ -103,8 +119,39 @@ class SubtitleGenerationController(QObject):
             return
         data = bytes(self.batch_process.readAllStandardOutput()).decode("utf-8", errors="ignore")
         if data:
-            self._emit_log(data)
-            self._process_stdout_chunk(data)
+            self._process_faster_whisper_output(data)
+
+    def _process_faster_whisper_output(self, chunk: str) -> None:
+        self._stdout_buffer += chunk
+        while True:
+            next_cr = self._stdout_buffer.find("\r")
+            next_nl = self._stdout_buffer.find("\n")
+
+            if next_cr == -1 and next_nl == -1:
+                break
+
+            if next_cr != -1 and next_nl == next_cr + 1:
+                line = self._stdout_buffer[:next_cr]
+                self._stdout_buffer = self._stdout_buffer[next_nl + 1 :]
+                if line:
+                    self._emit_log(line + "\n")
+                    self._handle_stdout_line(line)
+                continue
+
+            if next_cr == -1 or (0 <= next_nl < next_cr):
+                line = self._stdout_buffer[:next_nl].rstrip("\r")
+                self._stdout_buffer = self._stdout_buffer[next_nl + 1 :]
+                if line:
+                    self._emit_log(line + "\n")
+                    self._handle_stdout_line(line)
+                continue
+
+            line = self._stdout_buffer[:next_cr].rstrip("\r")
+            self._stdout_buffer = self._stdout_buffer[next_cr + 1 :]
+            if line:
+                self.processing_progress.emit(line)
+            else:
+                self.processing_progress.emit("")
 
     def _process_stdout_chunk(self, chunk: str) -> None:
         """将标准输出拆分成独立的行并匹配状态。"""
@@ -128,15 +175,19 @@ class SubtitleGenerationController(QObject):
         normalized = os.path.abspath(parsed_path) if parsed_path else None
 
         if self._has_seen_processing_line and self._last_processing_file:
+            self._emit_log(f"处理完成：{self._last_processing_file}\n")
             self._schedule_translation_for_video(self._last_processing_file)
 
         self._has_seen_processing_line = True
         self._last_processing_file = self._dequeue_next_video_file() or normalized
+        if self._last_processing_file:
+            self._emit_log(f"开始处理：{self._last_processing_file}\n")
 
     def _schedule_translation_for_video(self, video_path: str) -> None:
         """延迟 3 秒后将字幕路径加入翻译队列。"""
 
         subtitle_path = self._expected_srt_path(video_path)
+        self._srt_to_video[subtitle_path] = video_path
 
         def enqueue() -> None:
             self._emit_translation(f"已加入翻译队列: {subtitle_path}\n")
@@ -151,6 +202,7 @@ class SubtitleGenerationController(QObject):
 
     def _flush_last_processed_video(self) -> None:
         if self._has_seen_processing_line and self._last_processing_file:
+            self._emit_log(f"处理完成：{self._last_processing_file}\n")
             self._schedule_translation_for_video(self._last_processing_file)
         self._last_processing_file = None
         self._has_seen_processing_line = False
@@ -161,6 +213,7 @@ class SubtitleGenerationController(QObject):
         self._has_seen_processing_line = False
         self._last_processing_file = None
         self._stdout_buffer = ""
+        self.processing_progress.emit("")
         self._waiting_translation_path = None
 
     def _terminate_process(self, process: QProcess | None) -> None:
@@ -352,6 +405,7 @@ class SubtitleGenerationController(QObject):
             self._emit_translation("字幕翻译进程启动失败。\n")
             self.translation_process = None
             return False
+        self.translation_progress.emit(0, 0)
         return True
 
     def _handle_translation_output(self) -> None:
@@ -359,14 +413,45 @@ class SubtitleGenerationController(QObject):
             return
         data = bytes(self.translation_process.readAllStandardOutput()).decode("utf-8", errors="ignore")
         if data:
-            self._emit_translation(data)
+            self._process_translation_stdout_chunk(data)
+
+    def _process_translation_stdout_chunk(self, chunk: str) -> None:
+        self._translation_stdout_buffer += chunk
+        while True:
+            newline_index = self._translation_stdout_buffer.find("\n")
+            if newline_index == -1:
+                break
+            line = self._translation_stdout_buffer[:newline_index].rstrip("\r")
+            self._translation_stdout_buffer = self._translation_stdout_buffer[newline_index + 1 :]
+            if line:
+                self._handle_translation_stdout_line(line)
+
+    def _handle_translation_stdout_line(self, line: str) -> None:
+        prefix = "[PROGRESS]"
+        if line.startswith(prefix):
+            payload = line[len(prefix) :].strip()
+            try:
+                current_str, total_str = payload.split("/", 1)
+                current = int(current_str.strip())
+                total = int(total_str.strip())
+            except (ValueError, AttributeError):
+                self._emit_translation(line + "\n")
+                return
+            self.translation_progress.emit(current, total)
+            return
+        self._emit_translation(line + "\n")
 
     def _handle_translation_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
         filename = self.current_translation or "未知字幕"
         if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
             self._emit_translation(f"{filename} 翻译完成。\n")
+            if self.current_translation:
+                video_path = self._srt_to_video.pop(self.current_translation, None)
+                if video_path:
+                    self._emit_file_completed(video_path)
         else:
             self._emit_translation(f"{filename} 翻译失败，退出码 {exit_code}。\n")
+        self.translation_progress.emit(0, 0)
         self.translation_process = None
         self.current_translation = None
         self._start_next_translation()
@@ -376,6 +461,7 @@ class SubtitleGenerationController(QObject):
     def _handle_translation_error(self, error: QProcess.ProcessError) -> None:
         filename = self.current_translation or "未知字幕"
         self._emit_translation(f"{filename} 翻译进程错误：{error}。\n")
+        self.translation_progress.emit(0, 0)
         self.translation_process = None
         self.current_translation = None
         self._start_next_translation()
@@ -419,3 +505,6 @@ class SubtitleGenerationController(QObject):
 
     def _emit_translation(self, text: str) -> None:
         self.translation_message.emit(text)
+
+    def _emit_file_completed(self, path: str) -> None:
+        self.file_completed.emit(path)

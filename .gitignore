@@ -8,7 +8,8 @@ wheels/
 JAVTransl_v1.0
 # Virtual environments
 .venv
-
+test.py
+videofiles.txt
 Faster-Whisper-XXL/
 release/
 lib/

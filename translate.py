@@ -9,7 +9,6 @@ Output:
 """
 
 from __future__ import annotations
-from tqdm import tqdm
 import os
 import re
 import sys
@@ -263,21 +262,26 @@ def translate_file(input_path: str) -> str:
     total_lines = len(source_lines)
     translated_lines: List[str] = [""] * total_lines
 
-    # 进度条：以“行”为单位
-    with tqdm(total=total_lines, desc="Translating subtitles", unit="line") as pbar:
-        i = 0
-        while i < total_lines:
-            batch_src = source_lines[i:i + BATCH_SIZE]
-            try:
-                batch_out = translate_batch(batch_src)
-                translated_lines[i:i + BATCH_SIZE] = batch_out
-                pbar.update(len(batch_out))   # 正常 batch
-            except Exception:
-                # 兜底：逐行翻译
-                for j, line in enumerate(batch_src):
-                    translated_lines[i + j] = translate_line(line)
-                    pbar.update(1)           # 逐行推进
-            i += BATCH_SIZE
+    def emit_progress(done: int, total: int) -> None:
+        print(f"[PROGRESS] {done}/{total}", flush=True)
+
+    emit_progress(0, total_lines)
+    done = 0
+    i = 0
+    while i < total_lines:
+        batch_src = source_lines[i:i + BATCH_SIZE]
+        try:
+            batch_out = translate_batch(batch_src)
+            translated_lines[i:i + BATCH_SIZE] = batch_out
+            done += len(batch_out)
+            emit_progress(done, total_lines)
+        except Exception:
+            # 兜底：逐行翻译
+            for j, line in enumerate(batch_src):
+                translated_lines[i + j] = translate_line(line)
+                done += 1
+                emit_progress(done, total_lines)
+        i += BATCH_SIZE
 
     # 写回 entries
     for (e_idx, l_idx), out in zip(positions, translated_lines):
