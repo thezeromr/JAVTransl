@@ -9,7 +9,8 @@ JAVTransl 可以自动从日语视频（你懂的）中生成中文字幕
 
 使用 [TransWithAI/Whisper-Vad-EncDec-ASMR-onnx](https://huggingface.co/TransWithAI/Whisper-Vad-EncDec-ASMR-onnx) 音声优化 VAD 模型
 
-参考了 https://github.com/TransWithAI/Faster-Whisper-TransWithAI-ChickenRice 的部分代码，感谢！
+参考了 https://github.com/TransWithAI/Faster-Whisper-TransWithAI-ChickenRice 的部分代码，感谢！也推荐试试看这个项目，更专业
+
 
 
 下载最新Release，解压缩，运行JAVTransl.exe即可
